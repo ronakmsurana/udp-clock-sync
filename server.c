@@ -2,8 +2,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>          // FIX 1: needed for SIGCHLD
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/wait.h>        // FIX 1: needed for waitpid / SIG_IGN
 #include <netinet/in.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -25,119 +27,183 @@ double get_timestamp() {
     gettimeofday(&tv, NULL);
     return tv.tv_sec + (tv.tv_usec / 1000000.0);
 }
-// generate cookies
+
+// Generate a static cookie for DTLS handshake
+// NOTE: In production this should be HMAC-based (e.g. HMAC-SHA256 over client IP+port+secret)
 int generate_cookie(SSL *ssl, unsigned char *cookie, unsigned int *cookie_len) {
     memcpy(cookie, "dtls_cookie_123", 15);
     *cookie_len = 15;
     return 1;
 }
 
-// Verifies the cookie sent back by the client
+// Verify the cookie sent back by the client
 int verify_cookie(SSL *ssl, const unsigned char *cookie, unsigned int cookie_len) {
-    if (cookie_len == 15 && memcmp(cookie, "dtls_cookie_123", 15) == 0) return 1;
+    if (cookie_len == 15 && memcmp(cookie, "dtls_cookie_123", 15) == 0)
+        return 1;
     return 0;
 }
 
-void handle_client(SSL *ssl, int client_fd) {
-    
-    // Complete the SSL handshake
+void handle_client(SSL *ssl, int client_fd, int client_count) {
+
+    // Complete the DTLS handshake
     if (SSL_accept(ssl) <= 0) {
         ERR_print_errors_fp(stderr);
         goto cleanup;
     }
 
-    SyncPacket packet;
-    
-    // Read the incoming packet
-    int len = SSL_read(ssl, &packet, sizeof(packet));
-    if (len == sizeof(SyncPacket)) {
-        // Record T1 immediately upon receiving
-        packet.t1 = get_timestamp();
-        
-        printf("Received sync request from client. T0 recorded as: %f\n", packet.t0);
+    printf("Secure DTLS session established. Handling client %d...\n", client_count);
 
-        // Record T2 immediately before sending back
-        packet.t2 = get_timestamp();
-        
-        // Send the populated packet back
-        SSL_write(ssl, &packet, sizeof(packet));
-        printf("Replied to client with T1 and T2.\n");
+    // -- The Deadman's Switch (Read Timeout)
+    struct timeval tv;
+    tv.tv_sec = 10; // 10 seconds of silence = client is dead
+    tv.tv_usec = 0;
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    SyncPacket packet;
+    while (1) {
+        int len = SSL_read(ssl, &packet, sizeof(packet));
+
+        if (len <= 0) {
+            int err = SSL_get_error(ssl, len);
+            // FIX 2: Distinguish clean disconnect from real errors
+            if (err == SSL_ERROR_ZERO_RETURN) {
+                printf("Client %d closed the session cleanly.\n", client_count);
+            } else {
+                printf("Client %d disconnected (SSL error %d). Child shutting down.\n", client_count,err);
+            }
+            break;
+        }
+
+        if (len == sizeof(SyncPacket)) {
+            // Record T1 immediately upon receiving
+            packet.t1 = get_timestamp();
+            // printf("Sync request received. T0=%.6f\n", packet.t0);
+
+            // Record T2 immediately before sending back
+            packet.t2 = get_timestamp();
+
+            if (SSL_write(ssl, &packet, sizeof(packet)) <= 0) {
+                fprintf(stderr, "SSL_write failed. Dropping client.\n");
+                break;
+            }
+            // printf("Replied with T1=%.6f T2=%.6f\n", packet.t1, packet.t2);
+        } else {
+            // FIX 3: Ignore garbage / partial packets instead of silently processing them
+            fprintf(stderr, "Unexpected packet size %d (expected %zu). Ignoring.\n",
+                    len, sizeof(SyncPacket));
+        }
     }
 
 cleanup:
     SSL_shutdown(ssl);
     SSL_free(ssl);
     close(client_fd);
-    exit(0); // Exit the child process
+    exit(0);
 }
 
 int main() {
+    // FIX 1: Prevent zombie child processes — kernel reaps them automatically
+    signal(SIGCHLD, SIG_IGN);
+
     int listen_fd;
     struct sockaddr_in server_addr, client_addr;
 
-    // Initialize OpenSSL
     OpenSSL_add_ssl_algorithms();
     SSL_load_error_strings();
     SSL_CTX *ctx = SSL_CTX_new(DTLS_server_method());
+    if (!ctx) {
+        ERR_print_errors_fp(stderr);
+        exit(EXIT_FAILURE);
+    }
 
-    // Load Certificates (Mandatory for SSL/TLS requirement)
+    // Load server certificate and private key
     if (SSL_CTX_use_certificate_file(ctx, "server-cert.pem", SSL_FILETYPE_PEM) <= 0 ||
         SSL_CTX_use_PrivateKey_file(ctx, "server-key.pem", SSL_FILETYPE_PEM) <= 0) {
         ERR_print_errors_fp(stderr);
         exit(EXIT_FAILURE);
     }
 
-    // Set cookie callbacks for DTLSv1_listen
+    // FIX 4: Verify that the private key matches the certificate
+    if (!SSL_CTX_check_private_key(ctx)) {
+        fprintf(stderr, "Private key does not match certificate.\n");
+        exit(EXIT_FAILURE);
+    }
+
     SSL_CTX_set_cookie_generate_cb(ctx, generate_cookie);
     SSL_CTX_set_cookie_verify_cb(ctx, verify_cookie);
 
-    // Create and bind the initial UDP socket
+    // FIX 2: Check socket() return value
     listen_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (listen_fd < 0) {
+        perror("socket");
+        exit(EXIT_FAILURE);
+    }
 
     int opt = 1;
-    
     setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     setsockopt(listen_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
 
     memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
+    server_addr.sin_family      = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(PORT);
+    server_addr.sin_port        = htons(PORT);
 
-    bind(listen_fd, (struct sockaddr*)&server_addr, sizeof(server_addr));
+    // FIX 2: Check bind() return value
+    if (bind(listen_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        perror("bind");
+        exit(EXIT_FAILURE);
+    }
+
     printf("DTLS Time Server listening on UDP port %d\n", PORT);
 
-    // The listening loop
+    int client_count = 0;
     while (1) {
         SSL *ssl = SSL_new(ctx);
         BIO *bio = BIO_new_dgram(listen_fd, BIO_NOCLOSE);
         SSL_set_bio(ssl, bio, bio);
         SSL_set_options(ssl, SSL_OP_COOKIE_EXCHANGE);
 
-        // Listen for incoming ClientHello and process the cookie exchange
+
+        // Block until a valid ClientHello with correct cookie arrives
         while (DTLSv1_listen(ssl, (BIO_ADDR *)&client_addr) <= 0);
+        client_count++;
+        printf("Client %d verified. Forking child process...\n", client_count);
 
-        printf("Client verified. Forking new process...\n");
-
-        // Concurrency: Hand off the client to a new connected socket
+        // Create a new connected socket dedicated to this client
         int connected_fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (connected_fd < 0) {
+            perror("socket (child)");
+            SSL_free(ssl);
+            continue;  // FIX 2: Don't crash the whole server on one bad socket
+        }
         setsockopt(connected_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
         setsockopt(connected_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
-        
+
         if (bind(connected_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-            perror("CRITICAL: Child socket bind failed");
-            exit(EXIT_FAILURE);
+            perror("bind (child)");
+            close(connected_fd);
+            SSL_free(ssl);
+            continue;  // FIX 2: Recover gracefully instead of exit(EXIT_FAILURE)
         }
 
         connect(connected_fd, (struct sockaddr*)&client_addr, sizeof(client_addr));
 
-        if (fork() == 0) {
+        pid_t pid = fork();
+        if (pid == 0) {
+            // Child: take over the connected socket
             close(listen_fd);
             BIO_set_fd(SSL_get_rbio(ssl), connected_fd, BIO_NOCLOSE);
             BIO_ctrl(SSL_get_rbio(ssl), BIO_CTRL_DGRAM_SET_CONNECTED, 0, &client_addr);
-            handle_client(ssl, connected_fd);
-        } else {
+            handle_client(ssl, connected_fd, client_count);
+            // handle_client calls exit(0) — never reaches here
+        } else if (pid > 0) {
+            // Parent: clean up its copy and loop back for the next client
             SSL_free(ssl);
+            close(connected_fd);
+        } else {
+            perror("fork");
+            SSL_free(ssl);
+            close(connected_fd);
         }
     }
 
