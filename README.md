@@ -25,12 +25,27 @@ openssl req -x509 -newkey rsa:4096 -keyout server-key.pem -out server-cert.pem -
 ```
 (Hit Enter to skip through the requested details)
 
-### 2. Compile the Code
+### 2. npm requirement
+
+```
+sudo apt install npm (brew install npm for mac)
+npm install express
+```
+
+### 3. Get ip address
+
+```
+ipconfig getifaddr en0 (mac)
+ip -4 addr show eth0 (linux)
+```
+
+### 4. Compile the Code
 *(Mac Users: Ensure you have added the Homebrew OpenSSL paths to your `~/.zshrc` profile first).*
 ```
 gcc server.c -o dtls_server -lssl -lcrypto
 gcc client.c -o dtls_client -lssl -lcrypto
 gcc stress_client.c -o stress_client -lssl -lcrypto
+chmod +x run_test.sh
 ```
 Incase the above commands fail due to OpenSSL errors, use these instead:
 
@@ -38,6 +53,7 @@ Incase the above commands fail due to OpenSSL errors, use these instead:
 gcc server.c -o dtls_server -I$(brew --prefix openssl)/include -L$(brew --prefix openssl)/lib -lssl -lcrypto
 gcc client.c -o dtls_client -I$(brew --prefix openssl)/include -L$(brew --prefix openssl)/lib -lssl -lcrypto
 gcc stress_client.c -o stress_client -I$(brew --prefix openssl)/include -L$(brew --prefix openssl)/lib -lssl -lcrypto
+chmod +x run_test.sh
 ```
 
 ## Usage
@@ -49,14 +65,17 @@ gcc stress_client.c -o stress_client -I$(brew --prefix openssl)/include -L$(brew
 2. **Start the Client** (Open a new terminal/device):
    `./dtls_client `
 
-   *The client will connect, calculate the network delay/offset, and ping the server every 5 seconds to correct clock drift.*
+   *The client will connect, calculate the network delay/offset, and ping the server every 2 seconds to correct clock drift.*
 
 ### Concurrent Stress Test
 To evaluate the server's performance under heavy load:
 1. Ensure the server is running.
 
 2. Run the benchmarking script:
-   `./run_test.sh`
+   ```
+   chmod +x run_test.sh
+   ./run_test.sh
+   ```
    
    *This spawns 10 concurrent clients that will hit the server with 10,000 requests and output the average latency and throughput.*
 
