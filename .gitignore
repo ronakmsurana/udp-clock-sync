@@ -15,17 +15,11 @@ ehthumbs_vista.db
 *.msp
 *.lnk
 
-# Python ---
-__pycache__/
-*.py[cod]
-*$py.class
-
 # Virtual Environments ---
 venv/
 env/
 ENV/
 .env
-
 
 # C ---
 *.o
@@ -43,3 +37,8 @@ ENV/
 
 # VS Code ---
 .vscode/
+
+# node
+node_modules
+*.json
+

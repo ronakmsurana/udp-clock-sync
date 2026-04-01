@@ -8,9 +8,9 @@
 #include <openssl/err.h>
 #include <sys/time.h>
 
-#define SERVER_IP "192.168.200.202"
+#define SERVER_IP "10.30.202.185"
 #define PORT 8080
-#define SYNC_INTERVAL_SEC 5
+#define SYNC_INTERVAL_SEC 2
 #define MAX_RETRIES 3
 
 // Protocol Structure — matches server exactly
@@ -39,10 +39,7 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    // FIX 1: Explicitly disable peer certificate verification
-    // (acceptable for a lab/demo environment using a self-signed cert)
-    // To enable proper verification, replace SSL_VERIFY_NONE with SSL_VERIFY_PEER
-    // and load the CA cert: SSL_CTX_load_verify_locations(ctx, "server-cert.pem", NULL)
+    
     SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
 
     // FIX 2: Check socket() return value
@@ -62,13 +59,13 @@ int main() {
     server_addr.sin_family = AF_INET;
     server_addr.sin_port   = htons(PORT);
 
-    // FIX 2: Check inet_pton return value
+    // Check inet_pton return value
     if (inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr) <= 0) {
         fprintf(stderr, "Invalid server IP address: %s\n", SERVER_IP);
         exit(EXIT_FAILURE);
     }
 
-    // FIX 2: Check connect() return value
+    // Check connect() return value
     if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
         perror("connect");
         exit(EXIT_FAILURE);
@@ -77,7 +74,9 @@ int main() {
     SSL *ssl = SSL_new(ctx);
     SSL_set_fd(ssl, sockfd);
 
-    if (SSL_connect(ssl) <= 0) {
+    if (SSL_connect(ssl) <= 0)
+    {
+        fprintf(stderr, "\n❌ CONNECTION FAILED: The server did not respond.\n");
         ERR_print_errors_fp(stderr);
         exit(EXIT_FAILURE);
     }
@@ -85,7 +84,7 @@ int main() {
     printf("DTLS handshake complete. Starting sync loop (interval: %ds)...\n\n",
            SYNC_INTERVAL_SEC);
 
-    // FIX 3: Track consecutive failures; exit cleanly after MAX_RETRIES
+    // Track consecutive failures; exit cleanly after MAX_RETRIES
     int consecutive_failures = 0;
 
     while (1) {
@@ -112,17 +111,21 @@ int main() {
             double offset = ((packet.t1 - packet.t0) + (packet.t2 - t3)) / 2.0;
             double synced = get_timestamp() + offset;
 
-            printf("TIMESTAMPS\n");
-            printf("  T0 (Client Send):     %.8f\n", packet.t0);
-            printf("  T1 (Server Receive):  %.8f\n", packet.t1);
-            printf("  T2 (Server Transmit): %.8f\n", packet.t2);
-            printf("  T3 (Client Receive):  %.8f\n", t3);
-            printf("  Delay:  %.8f s\n", delay);
-            printf("  Offset: %+.8f s\n", offset);
-            printf("  Synchronized time:    %.8f\n\n", synced);
+            // printf("TIMESTAMPS\n");
+            // printf("  T0 (Client Send):     %.8f\n", packet.t0);
+            // printf("  T1 (Server Receive):  %.8f\n", packet.t1);
+            // printf("  T2 (Server Transmit): %.8f\n", packet.t2);
+            // printf("  T3 (Client Receive):  %.8f\n", t3);
+            // printf("  Delay:  %.8f s\n", delay);
+            // printf("  Offset: %+.8f s\n", offset);
+            // printf("  Synchronized time:    %.8f\n\n", synced);
+
+            // Output pure JSON for the frontend bridge
+            printf("{\"delay\": %.8f, \"offset\": %.8f, \"synced_time\": %.8f}\n", delay, offset, synced);
+            fflush(stdout); // Crucial: forces the data out immediately
 
         } else {
-            // FIX 3: Count failures; only give up after MAX_RETRIES
+            // Count failures; only give up after MAX_RETRIES
             consecutive_failures++;
             int ssl_err = SSL_get_error(ssl, bytes_read);
             fprintf(stderr, "Read failed (SSL error %d). Attempt %d/%d.\n",
