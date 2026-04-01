@@ -1,0 +1,25 @@
+{
+  "name": "udp-clock-sync",
+  "version": "1.0.0",
+  "description": "A concurrent client-server system written in C that synchronizes system clocks over UDP. It uses a 4-timestamp request-reply protocol to calculate precise network delay and clock drift, completely secured by OpenSSL (DTLS).",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ronakmsurana/udp-clock-sync.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/ronakmsurana/udp-clock-sync/issues"
+  },
+  "homepage": "https://github.com/ronakmsurana/udp-clock-sync#readme",
+  "dependencies": {
+    "express": "^5.2.1",
+    "socket.io": "^4.8.3"
+  }
+}

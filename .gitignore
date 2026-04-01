@@ -39,6 +39,4 @@ ENV/
 .vscode/
 
 # node
-node_modules
-*.json
 
