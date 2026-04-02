@@ -78,7 +78,7 @@ int verify_cookie(SSL *ssl, const unsigned char *cookie, unsigned int cookie_len
     return 0; // Fake or spoofed cookie!
 }
 
-void handle_client(SSL *ssl, int client_fd, int client_count) {
+void handle_client(SSL *ssl, int client_fd, int client_id) {
 
     // Complete the DTLS handshake
     if (SSL_accept(ssl) <= 0) {
@@ -86,7 +86,7 @@ void handle_client(SSL *ssl, int client_fd, int client_count) {
         goto cleanup;
     }
 
-    printf("Secure DTLS session established. Handling client %d...\n", client_count);
+    printf("Secure DTLS session established. Handling client %d...\n", client_id);
 
     // -- The Deadman's Switch (Read Timeout)
     struct timeval tv;
@@ -102,14 +102,15 @@ void handle_client(SSL *ssl, int client_fd, int client_count) {
             int err = SSL_get_error(ssl, len);
             // FIX 2: Distinguish clean disconnect from real errors
             if (err == SSL_ERROR_ZERO_RETURN) {
-                printf("Client %d closed the session cleanly.\n", client_count);
+                printf("Client %d closed the session cleanly.\n", client_id);
             } else {
-                printf("Client %d disconnected (SSL error %d). Child shutting down.\n", client_count,err);
+                printf("Client %d disconnected (SSL error %d). Child shutting down.\n", client_id,err);
             }
             break;
         }
 
-        if (len == sizeof(SyncPacket)) {
+        if (len == sizeof(SyncPacket) || len == 16)
+        {
             // Record T1 immediately upon receiving
             packet.t1 = get_timestamp();
             // printf("Sync request received. T0=%.6f\n", packet.t0);
@@ -122,8 +123,18 @@ void handle_client(SSL *ssl, int client_fd, int client_count) {
                 break;
             }
             // printf("Replied with T1=%.6f T2=%.6f\n", packet.t1, packet.t2);
-        } else {
-            // FIX 3: Ignore garbage / partial packets instead of silently processing them
+            double client_synced_time;
+            int bytes_read = SSL_read(ssl, &client_synced_time, sizeof(client_synced_time));
+            
+            if (bytes_read == sizeof(client_synced_time)) {
+                double server_current_time = packet.t1;
+                double difference = client_synced_time - server_current_time;
+                
+                printf("[Client %d] Sync Report: Client %.9f, Server %.9f, diff %.9f\n", client_id, client_synced_time, server_current_time, difference);
+            }
+        }
+        else
+        {
             fprintf(stderr, "Unexpected packet size %d (expected %zu). Ignoring.\n",
                     len, sizeof(SyncPacket));
         }
@@ -191,7 +202,7 @@ int main() {
 
     printf("DTLS Time Server listening on UDP port %d\n", PORT);
 
-    int client_count = 0;
+    int client_id = 0;
     while (1) {
         SSL *ssl = SSL_new(ctx);
         BIO *bio = BIO_new_dgram(listen_fd, BIO_NOCLOSE);
@@ -201,8 +212,8 @@ int main() {
 
         // Block until a valid ClientHello with correct cookie arrives
         while (DTLSv1_listen(ssl, (BIO_ADDR *)&client_addr) <= 0);
-        client_count++;
-        printf("Client %d verified. Forking child process...\n", client_count);
+        client_id++;
+        printf("Client %d verified. Forking child process...\n", client_id);
 
         // Create a new connected socket dedicated to this client
         int connected_fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -229,7 +240,7 @@ int main() {
             close(listen_fd);
             BIO_set_fd(SSL_get_rbio(ssl), connected_fd, BIO_NOCLOSE);
             BIO_ctrl(SSL_get_rbio(ssl), BIO_CTRL_DGRAM_SET_CONNECTED, 0, &client_addr);
-            handle_client(ssl, connected_fd, client_count);
+            handle_client(ssl, connected_fd, client_id);
             // handle_client calls exit(0) — never reaches here
         } else if (pid > 0) {
             // Parent: clean up its copy and loop back for the next client

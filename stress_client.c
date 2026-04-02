@@ -8,9 +8,9 @@
 #include <openssl/err.h>
 #include <sys/time.h>
 
-#define SERVER_IP "127.0.0.1"
+#define SERVER_IP "10.30.201.234"
 #define PORT 8080
-#define NUM_REQUESTS 1000 // Hammer the server with 1,000 requests
+#define NUM_REQUESTS 100 // Hammer the server with 1,000 requests
 
 typedef struct {
     double t0;

@@ -115,7 +115,7 @@ int main() {
             // math for offset and delay calculation
             double delay  = (t3 - packet.t0) - (packet.t2 - packet.t1);
             double offset = ((packet.t1 - packet.t0) + (packet.t2 - t3)) / 2.0;
-            double synced = get_timestamp() + offset;
+            double synced = packet.t0 + (delay / 2.0) + offset;
 
             // printf("TIMESTAMPS\n");
             // printf("  T0 (Client Send):     %.8f\n", packet.t0);
@@ -125,9 +125,17 @@ int main() {
             // printf("  Delay:  %.8f s\n", delay);
             // printf("  Offset: %+.8f s\n", offset);
             // printf("  Synchronized time:    %.8f\n\n", synced);
+            double server_time = packet.t1;
+            double difference = synced - server_time;
+            if (SSL_write(ssl, &synced, sizeof(synced)) <= 0) {
+                printf("Failed to send synced time to server.\n");
+                break;
+            }
 
             // Output pure JSON for the frontend bridge
-            printf("{\"delay\": %.8f, \"offset\": %.8f, \"synced_time\": %.8f}\n", delay, offset, synced);
+           // Output pure JSON for the frontend bridge (Now with all 5 metrics!)
+            printf("{\"delay\": %.8f, \"offset\": %.8f, \"synced_time\": %.8f, \"server_time\": %.8f, \"difference\": %.10f}\n", 
+                   delay, offset, synced, server_time, difference);
             fflush(stdout); // Crucial: forces the data out immediately
 
         } else {
