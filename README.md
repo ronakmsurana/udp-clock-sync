@@ -1,53 +1,83 @@
-# udp-clock-sync
-# Secure UDP Distributed Clock Synchronization
 
-A concurrent client-server system written in C that synchronizes system clocks over UDP. It uses a 4-timestamp request-reply protocol to calculate precise network delay and clock drift, completely secured by OpenSSL (DTLS).
+# UDP Secure Clock Synchronization & Dashboard
 
-## Prerequisites
+A concurrent, full-stack client-server system that synchronizes system clocks over UDP with microsecond precision. It uses a 4-timestamp request-reply protocol (based on NTP) to calculate precise network delay and clock drift.
+
+The backend is written in C for maximum performance and secured entirely by OpenSSL (DTLS). The frontend features a real-time Node.js web dashboard that visualizes the synchronization metrics and orchestrates concurrent stress tests.
+
+## 🚀 Features
+
+* **Microsecond Precision:** Utilizes `<sys/time.h>` for highly accurate network latency and offset calculations.
+
+* **Stateless DoS Protection:** Implements dynamic HMAC SHA-256 DTLS cookies to completely mitigate UDP IP-spoofing without wasting server memory.
+
+* **True Concurrency:** Uses `fork()` and `SO_REUSEPORT` to spin up isolated child processes for incoming clients without blocking the main server thread.
+
+* **Real-Time Web Dashboard:** A Node.js/Express server bridges the C backend to a responsive HTML/CSS Grid UI using WebSockets (`socket.io`).
+
+## 🛠️ Prerequisites
+
 * **macOS / Linux:** Requires GCC and OpenSSL.
+
   * Mac: `brew install openssl`
+
   * Ubuntu/Debian: `sudo apt install build-essential libssl-dev`
-* **Windows:** Must be run using Windows Subsystem for Linux (WSL). Install WSL using `wsl --install`
 
-Open PowerShell, run 
-```
-wsl
-```
-use the Ubuntu commands above.
+* **Windows:** Must be run using Windows Subsystem for Linux (WSL). 
+   
+   Otherwise, open PowerShell and run `wsl --install`
+   
+   Then run
+   ```
+   wsl
+   ```
+   continue the rest of the process using Linux commands (starting above).
 
-## Quick Start
+* **Node.js:** Required to run the web dashboard.
+
+  * Mac: `brew install npm`
+
+  * Ubuntu: `sudo apt install nodejs npm`
+* **ExpressJs:** Frontend
+
+   * `npm install express`
+
+## ⚙️ Quick Start Setup
 
 ### 1. Generate the Security Certificate
-The server requires a self-signed certificate to run the DTLS handshake.
-Run this in your project folder:
+
+The server requires a self-signed certificate to execute the DTLS handshake. Run this in your project folder:
+
 ```
 openssl req -x509 -newkey rsa:4096 -keyout server-key.pem -out server-cert.pem -days 365 -nodes
 ```
-(Hit Enter to skip through the requested details)
 
-### 2. npm requirement
-
-```
-sudo apt install npm (brew install npm for mac)
-npm install express
-```
+*(Hit Enter to skip through the requested details)*
 
 ### 3. Get ip address
+Only for server: (You'll need to put the server's ip address into the client code)
 
+mac
 ```
-ipconfig getifaddr en0 (mac)
-ip -4 addr show eth0 (linux)
+ipconfig getifaddr en0
+```
+linux
+```
+ip -4 addr show eth0
 ```
 
-### 4. Compile the Code
-*(Mac Users: Ensure you have added the Homebrew OpenSSL paths to your `~/.zshrc` profile first).*
+### 4. Compile the C Backend
+
+Compile the server, client, and stress-testing executables.
+
 ```
 gcc server.c -o dtls_server -lssl -lcrypto
 gcc client.c -o dtls_client -lssl -lcrypto
 gcc stress_client.c -o stress_client -lssl -lcrypto
 chmod +x run_test.sh
 ```
-Incase the above commands fail due to OpenSSL errors, use these instead:
+
+Note for Mac Users: If the above fails due to OpenSSL paths, use: 
 
 ```
 gcc server.c -o dtls_server -I$(brew --prefix openssl)/include -L$(brew --prefix openssl)/lib -lssl -lcrypto
@@ -55,46 +85,62 @@ gcc client.c -o dtls_client -I$(brew --prefix openssl)/include -L$(brew --prefix
 gcc stress_client.c -o stress_client -I$(brew --prefix openssl)/include -L$(brew --prefix openssl)/lib -lssl -lcrypto
 chmod +x run_test.sh
 ```
+## 💻 Usage
 
-## Usage
+### 1. Start the DTLS Server
 
-### Standard Synchronization
-1. **Start the Server:**
-   `./dtls_server`
+In your first terminal, boot up the secure C server:
 
-2. **Start the Client** (Open a new terminal/device):
-   `./dtls_client `
+```
+./dtls_server
+```
 
-   *The client will connect, calculate the network delay/offset, and ping the server every 2 seconds to correct clock drift.*
+### 2. Launch the Web Dashboard
 
-### Concurrent Stress Test
-To evaluate the server's performance under heavy load:
-1. Ensure the server is running.
+In a second terminal, start the Node.js bridge. This will automatically spawn a background C client and serve the UI:
 
-2. Run the benchmarking script:
-   ```
-   chmod +x run_test.sh
-   ./run_test.sh
-   ```
-   
-   *This spawns 10 concurrent clients that will hit the server with 10,000 requests and output the average latency and throughput.*
+```
+node server.js
+```
 
-## Architecture & Design Choices
+Open your web browser and navigate to: **`http://localhost:3000`**
 
-* **Transport Layer (UDP):** Built natively using POSIX `<sys/socket.h>`. UDP was chosen to minimize transport overhead, which is critical for microsecond-level timekeeping.
-* **Security Layer (OpenSSL DTLS):** Because standard TLS requires the guaranteed delivery of TCP, it shatters over UDP. This system utilizes `DTLS_server_method()` and enforces a cryptographic "Cookie Exchange" during the handshake to completely mitigate UDP IP-spoofing and DoS attacks.
+### 3. Run the Concurrent Stress Test
+
+To evaluate the server's performance under heavy load, simply click the **"Run Stress Test"** button directly on the web dashboard.
+
+Alternatively, run the below commands in the terminal:
+```
+chmod +x run_test.sh
+./run_test.sh
+```
+It spawns 10 concurrent clients that will hammer the server with 10,000 secure requests and output the average latency and throughput.
+
+## 🧠 Architecture & Design Choices
+
+* **Transport Layer (UDP):** Built natively using POSIX `<sys/socket.h>`. UDP was chosen to minimize transport overhead and avoid TCP handshake delays, which is critical for microsecond-level timekeeping.
+
+* **Security Layer (OpenSSL DTLS & HMAC):** Because standard TLS requires the guaranteed delivery of TCP, it shatters over UDP. This system utilizes `DTLS_server_method()` and enforces a cryptographic "Cookie Exchange." Cookies are dynamically generated by hashing the client's IP with a randomized Server Secret using **HMAC SHA-256**, providing a stateless, bulletproof defense against IP spoofing and memory exhaustion attacks.
+
 * **Concurrency Engine (`fork` & `SO_REUSEPORT`):** The server handles simultaneous clients without blocking. Once a client passes the DTLS cookie challenge, the server uses `fork()` to spawn an isolated child process. By utilizing `SO_REUSEPORT`, the OS kernel routes that specific client's encrypted datagrams directly to the child, leaving the parent instantly ready for new connections.
-* **Resilience & Edge Cases:** Memory Leaks: Child processes utilize a "Deadman's Switch" (`SO_RCVTIMEO`) to safely self-terminate if a client abruptly disconnects.
-    * Zombie Processes: The parent server automatically reaps child processes via `SIGCHLD`.
-    * Garbage Data: Invalid packets that do not match the strict 24-byte `SyncPacket` struct are instantly rejected.
 
-## The Synchronization Math
-The protocol exchanges a `SyncPacket` containing timestamps recorded with `gettimeofday()` (microsecond precision).
-* T0: Client Send Time
-* T1: Server Receive Time
-* T2: Server Transmit Time
-* T3: Client Receive Time
+* **Resilience & Edge Cases:** 
+   * *Memory Leaks:* Child processes utilize a "Deadman's Switch" (`SO_RCVTIMEO`) to safely self-terminate if a client abruptly disconnects.
+  * *Zombie Processes:* The parent server automatically reaps child processes via `SIGCHLD`.
+  * *Garbage Data:* Invalid packets that do not match the strict 24-byte `SyncPacket` struct are instantly rejected.
 
-Once the client receives the packet back, it calculates:
-* **Network Delay (d):** (T3 - T0) - (T2 - T1)
-* **Clock Offset (theta):** (T1 - T0) + (T2 - T3)/2
+## 🧮 The Synchronization Math (NTP Protocol)
+
+The protocol exchanges a `SyncPacket` containing timestamps recorded with `gettimeofday()`.
+
+* **T0:** Client Send Time
+* **T1:** Server Receive Time
+* **T2:** Server Transmit Time
+* **T3:** Client Receive Time
+
+Once the client receives the packet back, it factors out the server's processing time to calculate the pure network metrics:
+
+* **Network Delay (d):** `(T3 - T0) - (T2 - T1)`
+* **Clock Offset (θ):** `((T1 - T0) + (T2 - T3)) / 2.0`
+
+The client then applies this offset to perfectly align its local clock to the server's clock using the formula: `T0 + (d / 2.0) + θ`
