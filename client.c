@@ -8,7 +8,7 @@
 #include <openssl/err.h>
 #include <sys/time.h>
 
-#define SERVER_IP "10.30.202.185"
+#define SERVER_IP "10.30.201.234"
 #define PORT 8080
 #define SYNC_INTERVAL_SEC 2
 #define MAX_RETRIES 3
@@ -39,8 +39,14 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    
-    SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
+    // Verifying server certificates
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+
+    if (SSL_CTX_load_verify_locations(ctx, "server-cert.pem", NULL) != 1) {
+        fprintf(stderr, "Error loading server-cert.pem. Make sure the file is in this folder!\n");
+        ERR_print_errors_fp(stderr);
+        exit(EXIT_FAILURE);
+    }
 
     // FIX 2: Check socket() return value
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);

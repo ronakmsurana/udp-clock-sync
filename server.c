@@ -10,6 +10,7 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
+#include <openssl/hmac.h>
 #include <sys/time.h>
 
 #define PORT 8080
@@ -28,19 +29,53 @@ double get_timestamp() {
     return tv.tv_sec + (tv.tv_usec / 1000000.0);
 }
 
-// Generate a static cookie for DTLS handshake
-// NOTE: In production this should be HMAC-based (e.g. HMAC-SHA256 over client IP+port+secret)
+// Generate a static cookie for DTLS handshake, HMAC-based (e.g. HMAC-SHA256 over client IP+port+secret)
+
+// Global secret key for cookies (generated once per server run)
+unsigned char cookie_secret[16];
+int cookie_initialized = 0;
+
 int generate_cookie(SSL *ssl, unsigned char *cookie, unsigned int *cookie_len) {
-    memcpy(cookie, "dtls_cookie_123", 15);
-    *cookie_len = 15;
+    // 1. Generate a random 16-byte secret key on the first run
+    if (!cookie_initialized) {
+        if (!RAND_bytes(cookie_secret, 16)) return 0;
+        cookie_initialized = 1;
+    }
+
+    // 2. Extract the connecting client's IP address and Port
+    struct sockaddr_in peer;
+    BIO_dgram_get_peer(SSL_get_rbio(ssl), &peer);
+
+    // 3. Cryptographically hash the Secret Key + Client IP together
+    unsigned int result_len;
+    HMAC(EVP_sha256(), 
+         cookie_secret, 16, 
+         (const unsigned char *)&peer.sin_addr, sizeof(peer.sin_addr), 
+         cookie, &result_len);
+
+    *cookie_len = result_len;
+    // printf("Generated Cookie (Hex): ");
+    // for (unsigned int i = 0; i < result_len; i++) {
+    //     printf("%02x", cookie[i]);
+    // }
+    // printf("\n");
+    // fflush(stdout);
     return 1;
 }
 
-// Verify the cookie sent back by the client
 int verify_cookie(SSL *ssl, const unsigned char *cookie, unsigned int cookie_len) {
-    if (cookie_len == 15 && memcmp(cookie, "dtls_cookie_123", 15) == 0)
-        return 1;
-    return 0;
+    unsigned char expected_cookie[EVP_MAX_MD_SIZE];
+    unsigned int expected_len;
+
+    // Run the same math to see what the cookie *should* be for this IP
+    generate_cookie(ssl, expected_cookie, &expected_len);
+
+    // 4. Compare what the client sent with our cryptographic expectation
+    // Using CRYPTO_memcmp prevents "timing attacks" where hackers guess passwords based on processing speed
+    if (cookie_len == expected_len && CRYPTO_memcmp(cookie, expected_cookie, expected_len) == 0) {
+        return 1; 
+    }
+    return 0; // Fake or spoofed cookie!
 }
 
 void handle_client(SSL *ssl, int client_fd, int client_count) {
